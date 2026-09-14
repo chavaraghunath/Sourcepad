@@ -23,8 +23,8 @@ public enum UtilityTransforms {
     }
 
     public static func apply(_ kind: Kind) {
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-              let pane = doc.primaryEditorViewController()?.editorPane else { return }
+        guard let doc = DocumentController.activeDocument,
+              let pane = doc.liveEditorPane() else { return }
         let sel = SciGetSelectionBytes(pane.view)
         let bytes = Array(SciGetText(pane.view).utf8)
         let input: String

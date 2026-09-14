@@ -997,9 +997,8 @@ public final class AgentPanelViewController: NSViewController, AgentConversation
     /// send time so what reaches the agent always reflects the live editor.
     private func currentEditorContext() -> AgentContextProvider.EditorContextSnapshot {
         let dc = NSDocumentController.shared
-        let active = dc.currentDocument as? TextDocument
-        let editor = active?.primaryEditorViewController()
-        let pane = editor?.editorPane
+        let active = DocumentController.activeDocument
+        let pane = active?.liveEditorPane()
         let openPaths = dc.documents.compactMap { ($0 as? TextDocument)?.fileURL?.path }
         // Agent-facing language is derived from the file extension, NOT the
         // editor's syntax lexer (which buckets many languages under "cpp").
@@ -1079,7 +1078,7 @@ public final class AgentPanelViewController: NSViewController, AgentConversation
         let items: [PaletteItem]
         switch trigger.kind {
         case .mention:
-            let active = (NSDocumentController.shared.currentDocument as? TextDocument)?.fileURL?.path
+            let active = DocumentController.activeDocument?.fileURL?.path
             items = MentionCompletions.items(query: trigger.query,
                                              workspaceRoot: completionWorkspaceRoot(),
                                              activeFilePath: active)

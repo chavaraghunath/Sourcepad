@@ -30,6 +30,13 @@ public struct Workspace: Codable, Equatable {
     /// Wall-clock date the workspace was created. Useful for sort order.
     public var createdAt: Date
 
+    /// Wall-clock date this workspace was last explicitly opened (Open
+    /// Folder…, Open Workspace…, a completed git clone) — as opposed to
+    /// merely existing. Nil for workspaces never opened that way (e.g. the
+    /// auto-created empty "Default" workspace). Drives the Welcome window's
+    /// Recent list, which shows folders/workspaces, not individual files.
+    public var lastOpenedAt: Date?
+
     public struct Settings: Codable, Equatable {
 
         /// Whether the background ProjectIndex runs for this workspace.
@@ -59,12 +66,14 @@ public struct Workspace: Codable, Equatable {
                 name: String,
                 roots: [URL] = [],
                 settings: Settings = Settings(),
-                createdAt: Date = Date()) {
+                createdAt: Date = Date(),
+                lastOpenedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.roots = roots
         self.settings = settings
         self.createdAt = createdAt
+        self.lastOpenedAt = lastOpenedAt
     }
 
     public static let defaultExcludedDirs: Set<String> = [

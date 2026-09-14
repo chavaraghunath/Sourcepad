@@ -56,26 +56,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = MainMenu.build()
         NSApp.activate(ignoringOtherApps: true)
 
-        // Open + show an untitled document on launch. We do this explicitly
-        // rather than relying on applicationShouldOpenUntitledFile, because:
-        //   (a) some launch paths (e.g. running the binary directly) skip it
-        //   (b) the default NSDocument display path doesn't reliably bring
-        //       our programmatic window controller to the front.
+        // Try to restore the previous session; if there's nothing to restore, or
+        // launched with no files (no Apple Event open pending), show the
+        // Welcome window rather than a phantom blank document — nothing is
+        // "open" until the user actually opens or creates something.
         DispatchQueue.main.async {
             // Skip if files were already opened via Apple Events (launch-with-file).
             if !NSDocumentController.shared.documents.isEmpty { return }
-            let openUntitled: () -> Void = {
-                guard NSDocumentController.shared.documents.isEmpty,
-                      let doc = try? NSDocumentController.shared.openUntitledDocumentAndDisplay(true) else { return }
-                for wc in doc.windowControllers {
-                    wc.showWindow(nil)
-                    wc.window?.makeKeyAndOrderFront(nil)
-                }
+            let showWelcome: () -> Void = {
+                guard NSDocumentController.shared.documents.isEmpty else { return }
+                WelcomeWindowController.shared.showWindow(nil)
             }
-            // Try to restore the previous session; if there's nothing to restore,
-            // or if every restore open fails, fall back to an untitled document.
-            if SessionRestore.shared.tryRestore(fallbackIfNoneOpened: openUntitled) { return }
-            openUntitled()
+            if SessionRestore.shared.tryRestore(fallbackIfNoneOpened: showWelcome) { return }
+            showWelcome()
         }
     }
 
@@ -86,6 +79,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
         return false  // Handled explicitly in applicationDidFinishLaunching above.
+    }
+
+    /// Standard macOS "reopen" gesture: clicking the Dock icon (or ⌘-Tab-ing
+    /// to the app) while it's running with no visible windows brings a
+    /// window back, the same as every other document-based Mac app. Without
+    /// this, the app would be reachable only via ⌘N or File ▸ Open once its
+    /// last window is closed. If documents exist but are merely hidden/
+    /// miniaturized, let AppKit's default un-minimize handling run instead
+    /// of showing Welcome on top of them.
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !flag else { return true }
+        guard NSDocumentController.shared.documents.isEmpty else { return true }
+        WelcomeWindowController.shared.showWindow(nil)
+        return true
     }
 
     // Modern (macOS 10.13+) multi-URL open handler.
@@ -240,9 +247,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc public func sourcepadFollowTail(_ sender: Any?) {
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
+        guard let doc = DocumentController.activeDocument,
               let url = doc.fileURL,
-              let pane = doc.primaryEditorViewController()?.editorPane else { return }
+              let pane = doc.liveEditorPane() else { return }
         TailMode.shared.startFollowing(url, pane: pane)
     }
 
@@ -265,16 +272,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
               let mode = EditorContentMode(rawValue: raw) else {
             NSSound.beep(); return
         }
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
+        guard let doc = DocumentController.activeDocument,
               let url = doc.fileURL else {
             NSSound.beep(); return
         }
         EditorContentFactory.nextOpenOverride = mode
 
-        // Close the current document and re-open the same URL. NSDocument's
-        // built-in flow handles the user-confirmation if the buffer is
-        // dirty; for placeholders the buffer is read-only anyway.
+        // Close the current document's tab and re-open the same URL. For
+        // placeholders the buffer is read-only, so there's nothing to
+        // confirm; a real dirty text buffer would need requestCloseTab's
+        // save-prompt instead, but "Open As" is only offered for non-text
+        // view modes today.
+        // Detach before close() — NSDocument's default close() unconditionally
+        // closes every window controller still attached (bypassing
+        // windowShouldClose), and this window is shared with any other open
+        // tabs. Detaching first means close() has nothing left to auto-close.
+        let wc = doc.windowControllers.first as? EditorWindowController
+        if let wc { doc.removeWindowController(wc) }
         doc.close()
+        if let wc { wc.editorViewController.removeTab(doc) }
         NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
             if let error { NSLog("[Sourcepad] reopen-as failed: \(error)") }
         }

@@ -58,9 +58,9 @@ public enum Formatters {
 
     /// Format the active editor's buffer in place.
     public static func formatActiveBuffer() {
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
+        guard let doc = DocumentController.activeDocument,
               let url = doc.fileURL,
-              let pane = doc.primaryEditorViewController()?.editorPane,
+              let pane = doc.liveEditorPane(),
               let spec = spec(forFileURL: url) else {
             NSSound.beep(); return
         }

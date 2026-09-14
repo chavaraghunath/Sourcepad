@@ -18,10 +18,15 @@ public final class WorkspaceIndexHost: IndexerCoordinatorDelegate {
     public private(set) var workspace: Workspace?
 
     private init() {
+        // Workspaces are per-window now (see EditorWindowController.workspace),
+        // so "the" live index follows whichever window is currently key
+        // rather than a single global active workspace. This keeps exactly
+        // one SQLite index + background indexer live at a time instead of
+        // one per open window/repo.
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(activeWorkspaceChanged),
-            name: .sourcepadActiveWorkspaceChanged,
+            selector: #selector(keyWindowChanged),
+            name: NSWindow.didBecomeKeyNotification,
             object: nil)
     }
 
@@ -35,8 +40,10 @@ public final class WorkspaceIndexHost: IndexerCoordinatorDelegate {
         load(workspace: ws)
     }
 
-    @objc private func activeWorkspaceChanged() {
-        let ws = WorkspaceManager.shared.activeWorkspace
+    @objc private func keyWindowChanged(_ note: Notification) {
+        guard let keyWindow = note.object as? NSWindow,
+              let wc = keyWindow.windowController as? EditorWindowController else { return }
+        let ws = wc.workspace
         guard ws.id != workspace?.id else {
             // Same workspace, just metadata changed — keep index/indexer.
             workspace = ws

@@ -146,6 +146,18 @@ public final class WorkspaceManager {
         return ws
     }
 
+    /// Stamp `lastOpenedAt` on the workspace with this id (if it exists) and
+    /// persist it. Called whenever a workspace is explicitly opened via
+    /// Open Folder…, Open Workspace…, or a completed git clone — drives the
+    /// Welcome window's Recent list.
+    @discardableResult
+    public func touch(_ id: String) -> Workspace? {
+        guard var ws = workspaces.first(where: { $0.id == id }) else { return nil }
+        ws.lastOpenedAt = Date()
+        upsert(ws)
+        return ws
+    }
+
     @discardableResult
     private func ensureAtLeastOneWorkspace() -> Workspace {
         if let existing = workspaces.first { return existing }

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Sourcepad — one window per text document. Hosts the editor split view and a
-// unified toolbar with sidebar toggle, navigation arrows, a search field,
-// and a preview toggle.
+// Sourcepad — one window can host many open documents as in-window tabs.
+// Hosts the editor split view and a unified toolbar with sidebar toggle,
+// navigation arrows, a search field, and a preview toggle.
+//
+// There is no native macOS window-tab grouping here — DocumentTabBar is the
+// only tab UI, and a file open never spawns a second NSWindow for an
+// existing window's sake (see Document/DocumentController.swift).
 
 import AppKit
 
@@ -12,17 +16,41 @@ public final class EditorWindowController: NSWindowController,
 
     public let editorViewController: EditorViewController
     private weak var rootContentViewController: RootContentViewController?
+    private weak var statusBar: StatusBarView?
 
     private weak var searchField: NSSearchField?
     private var localKeyMonitor: Any?
 
-    public init(document: TextDocument) {
-        let vc = EditorViewController(document: document)
+    /// True once every open document has approved closing and the window is
+    /// actually allowed to close — see windowShouldClose/attemptCloseRemainingDocuments.
+    private var closeApproved = false
+
+    // Keeps every live EditorWindowController alive for exactly as long as
+    // its window is open. A window with open documents is already retained
+    // via TextDocument.addWindowController(_:) (NSDocument.windowControllers),
+    // but a documentless workspace window (WelcomeWindowController.seedWindow)
+    // has no NSDocument at all — without this, its local `wc` goes out of
+    // scope and ARC deallocates the controller almost immediately. The
+    // NSWindow itself would survive (its content view controller retains the
+    // view hierarchy), but NSWindow.windowController is a weak back-reference,
+    // so it would silently go nil, breaking every `window.windowController as?
+    // EditorWindowController` lookup used to resolve join targets.
+    private static var retainedControllers: [ObjectIdentifier: EditorWindowController] = [:]
+
+    /// This window's own workspace (folder roots). Read-through to the
+    /// sidebar, which is the single source of truth and stays live as the
+    /// user opens folders / switches workspaces in this window.
+    public var workspace: Workspace { editorViewController.sidebarPane.workspace }
+
+    public var activeDocument: TextDocument? { editorViewController.activeDocument }
+    public var openDocuments: [TextDocument] { editorViewController.openDocuments }
+
+    public init(workspace: Workspace) {
+        let vc = EditorViewController(workspace: workspace)
         self.editorViewController = vc
 
         let bar = StatusBarView()
-        bar.editorPane = vc.editorPane
-        bar.document = document
+        self.statusBar = bar
 
         let root = RootContentViewController(editor: vc, statusBar: bar)
         self.rootContentViewController = root
@@ -30,44 +58,135 @@ public final class EditorWindowController: NSWindowController,
         let window = NSWindow(contentViewController: root)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 1180, height: 720))
-        window.title = "Sourcepad"
-        window.tabbingMode = .preferred
+        // Hard ceiling on the window's real size. Without one, AppKit's
+        // window-autolayout integration will grow the actual NSWindow frame
+        // to satisfy an oversized intrinsic-content-size demand from
+        // anywhere in the view tree, with no built-in sanity check — this is
+        // exactly how a stale "NSWindow Frame SourcepadMainWindow" autosave
+        // value was once found corrupted to 40,000+pt wide. Several views in
+        // the agent panel (chat bubble width, the @-mention chip row) only
+        // softly cap their width during active layout, which is plausible to
+        // misbehave transiently while content is streaming in. Rather than
+        // chase every such view, put a floor/ceiling on the window itself so
+        // this class of bug can never again make the window unusable.
+        // >= the split view's own combined minimums (sidebar 180 + editor
+        // 320 + agent 280 = 780, both visible by default) — a smaller
+        // contentMinSize would just fight those every time the user tries
+        // to shrink the window.
+        window.contentMinSize = NSSize(width: 820, height: 480)
+        window.contentMaxSize = NSSize(width: 3600, height: 2400)
+        window.title = workspace.roots.first?.lastPathComponent ?? workspace.name
+        // Every window is a fully independent session — never let macOS
+        // visually merge separate EditorWindowControllers as native window
+        // tabs. In-window tabs (DocumentTabBar) are the only tab model.
+        window.tabbingMode = .disallowed
         window.setFrameAutosaveName("SourcepadMainWindow")
         window.center()
+
+        // Sourcepad has its own deliberate session restore (App/SessionRestore.swift
+        // — a controllable, UserDefaults-based list of open file URLs). AppKit's
+        // separate, automatic OS-level window-state restoration (Saved Application
+        // State) would otherwise silently replay whatever windows/tabs were open
+        // at last quit on the next launch, bypassing DocumentController's join
+        // resolution entirely — producing confusing, unreproducible window
+        // states across relaunches. Opting out here makes our own
+        // SessionRestore the single source of truth for "what reopens."
+        window.isRestorable = false
 
         super.init(window: window)
         window.delegate = self
         window.registerForDraggedTypes([.fileURL])
 
-        // The document tab strip's × closes this window's document. performClose
-        // runs the standard unsaved-changes review first.
-        vc.documentTabBar.onClose = { [weak window] in window?.performClose(nil) }
-
         installToolbar(on: window)
         installAutoPairMonitor()
-        updateDocumentTabBarVisibility()
+        editorViewController.setDocumentTabBarVisible(true)
+        syncWindowChrome()
+        Self.retainedControllers[ObjectIdentifier(window)] = self
     }
 
-    /// Show our custom document tab strip only when macOS isn't already drawing
-    /// its native tab bar for this window's group (2+ tabbed documents). That
-    /// keeps a single visible close affordance in every configuration.
-    private func updateDocumentTabBarVisibility() {
-        let nativeTabBarVisible = window?.tabGroup?.isTabBarVisible ?? false
-        editorViewController.setDocumentTabBarVisible(!nativeTabBarVisible)
-        editorViewController.documentTabBar.refresh()
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) not used")
     }
 
     deinit {
         if let m = localKeyMonitor { NSEvent.removeMonitor(m) }
     }
 
+    // MARK: - Tabs
+
+    public func openTab(_ document: TextDocument, activate: Bool = true) {
+        editorViewController.openTab(document, activate: activate)
+        syncWindowChrome()
+    }
+
+    public func activateTab(_ document: TextDocument) {
+        editorViewController.activateTab(document)
+    }
+
+    public func editorPane(for document: TextDocument) -> EditorPaneViewController? {
+        editorViewController.editorPane(for: document)
+    }
+
+    /// Reflects the active tab (or this window's workspace, if empty) into
+    /// the window title/edited-dot and the status bar. NSDocument's built-in
+    /// synchronizeWindowTitleWithDocumentName() assumes one document per
+    /// window controller — overridden as a no-op below — so this is the only
+    /// thing driving window chrome now that a window can hold N documents.
+    func syncWindowChrome() {
+        guard let window else { return }
+        if let doc = editorViewController.activeDocument {
+            window.representedURL = doc.fileURL
+            window.title = doc.displayName
+            window.isDocumentEdited = doc.isDocumentEdited
+        } else {
+            window.representedURL = nil
+            window.title = workspace.roots.first?.lastPathComponent ?? workspace.name
+            window.isDocumentEdited = false
+        }
+        statusBar?.document = editorViewController.activeDocument
+        statusBar?.editorPane = editorViewController.editorPane
+        statusBar?.refresh()
+    }
+
+    public override func synchronizeWindowTitleWithDocumentName() {
+        // No-op — see syncWindowChrome(). Apple's default implementation
+        // assumes exactly one document per window controller.
+    }
+
     // MARK: - NSWindowDelegate
 
-    // Re-evaluate the custom tab strip when this window gains focus — that's when
-    // a native tab is added (this window resigns, another becomes key) or removed
-    // (collapsing back to a lone window that becomes key again).
-    public func windowDidBecomeKey(_ notification: Notification) { updateDocumentTabBarVisibility() }
-    public func windowDidBecomeMain(_ notification: Notification) { updateDocumentTabBarVisibility() }
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if closeApproved { return true }
+        attemptCloseRemainingDocuments()
+        return false
+    }
+
+    /// Runs each open document's standard unsaved-changes prompt one at a
+    /// time (recursing on the shrinking list, since a cancel must abort the
+    /// whole close). Only once every document has approved does the window
+    /// actually close.
+    private func attemptCloseRemainingDocuments() {
+        guard let doc = editorViewController.openDocuments.first else {
+            closeApproved = true
+            window?.close()
+            return
+        }
+        doc.canClose(withDelegate: self, shouldClose: #selector(document(_:shouldClose:contextInfo:)), contextInfo: nil)
+    }
+
+    @objc private func document(_ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        guard shouldClose, let textDoc = document as? TextDocument else { return }
+        // Detach before close() — see the identical comment in
+        // EditorViewController.document(_:shouldClose:contextInfo:). Here it
+        // also avoids this window closing itself prematurely partway through
+        // approving a multi-document close (attemptCloseRemainingDocuments
+        // is what's actually supposed to close the window, once the list is
+        // empty — not a side effect of an individual document's close()).
+        textDoc.removeWindowController(self)
+        textDoc.close()
+        editorViewController.removeTab(textDoc)
+        attemptCloseRemainingDocuments()
+    }
 
     public func windowWillClose(_ notification: Notification) {
         // Kill any shells this window spawned so they don't outlive it.
@@ -75,21 +194,12 @@ public final class EditorWindowController: NSWindowController,
         // Cancel any in-flight agent turn.
         rootContentViewController?.agentPanel.shutdown()
 
-        // VSCode-style: closing the last file shouldn't leave the app running
-        // window-less (which reads as "the app closed"). Re-open a blank
-        // untitled document so an empty editor window stays put. Skipped when
-        // the app is actually quitting (Cmd-Q) so it can shut down cleanly.
-        guard !AppDelegate.isTerminating else { return }
-        DispatchQueue.main.async {
-            guard !AppDelegate.isTerminating,
-                  NSDocumentController.shared.documents.isEmpty,
-                  let doc = try? NSDocumentController.shared.openUntitledDocumentAndDisplay(true)
-            else { return }
-            for wc in doc.windowControllers {
-                wc.showWindow(nil)
-                wc.window?.makeKeyAndOrderFront(nil)
-            }
-        }
+        // Standard macOS behavior: closing the last window just closes it —
+        // the app stays running (see AppDelegate.applicationShouldTerminateAfterLastWindowClosed),
+        // window-less, until the user asks for a new one (Dock click, which
+        // AppDelegate.applicationShouldHandleReopen handles; ⌘N; File ▸ Open).
+
+        if let window { Self.retainedControllers.removeValue(forKey: ObjectIdentifier(window)) }
     }
 
     // MARK: - Auto-pair monitor
@@ -118,10 +228,6 @@ public final class EditorWindowController: NSWindowController,
             }
             return event
         }
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) not used")
     }
 
     // MARK: - Toolbar identifiers
@@ -353,9 +459,9 @@ public final class EditorWindowController: NSWindowController,
 
     @objc public func sourcepadOpenFindInFiles(_ sender: Any?) {
         // Default search root = the sidebar's current root, fall back to the
-        // document's enclosing folder.
+        // active document's enclosing folder.
         let root = editorViewController.sidebarPane.rootURL
-            ?? editorViewController.document?.fileURL?.deletingLastPathComponent()
+            ?? editorViewController.activeDocument?.fileURL?.deletingLastPathComponent()
         FindInFilesWindowController.shared.show(searchingIn: root)
     }
 
@@ -367,10 +473,11 @@ public final class EditorWindowController: NSWindowController,
 
     public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let items = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil),
-              let urls = items as? [URL], !urls.isEmpty else { return false }
-        let dc = NSDocumentController.shared
+              let urls = items as? [URL], !urls.isEmpty,
+              let dc = NSDocumentController.shared as? DocumentController,
+              let window else { return false }
         for url in urls {
-            dc.openDocument(withContentsOf: url, display: true) { _, _, error in
+            dc.openDocument(withContentsOf: url, display: true, joinPolicy: .join(window)) { _, _, error in
                 if let error { NSLog("[Sourcepad] window-drag-open failed: \(url.path) — \(error)") }
             }
         }

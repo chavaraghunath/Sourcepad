@@ -23,7 +23,7 @@ public final class SessionRestore {
             guard let url = doc.fileURL else { continue }
             urls.append(url.path)
             if let wc = doc.windowControllers.first as? EditorWindowController {
-                carets[url.path] = wc.editorViewController.currentCaretByte()
+                carets[url.path] = wc.editorViewController.currentCaretByte(for: doc)
             }
         }
         let d = UserDefaults.standard

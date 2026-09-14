@@ -47,8 +47,8 @@ public enum LiveTextOCR {
     }
 
     private static func insertAtCaret(_ text: String) {
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-              let pane = doc.primaryEditorViewController()?.editorPane else { return }
+        guard let doc = DocumentController.activeDocument,
+              let pane = doc.liveEditorPane() else { return }
         let sel = SciGetSelectionBytes(pane.view)
         let pos = sel.location == NSNotFound ? 0 : sel.location
         SciInsertTextAt(pane.view, pos, text)

@@ -147,17 +147,35 @@ pass runs, to avoid "modified during build" collisions.
   (`security find-identity -v -p codesigning`). Notarizing needs a paid Apple
   Developer ID Application certificate. Until then, releases ship ad-hoc and users
   right-click → Open (or `xattr -dr com.apple.quarantine /Applications/Sourcepad.app`).
-- Package + publish a release:
+- **Version is centralized**: the repo-root [`VERSION`](../VERSION) file is the
+  single source of truth. `build.sh` stamps it (plus a commit-count build
+  number) into `CFBundleShortVersionString`/`CFBundleVersion` at build time —
+  never hand-edit the version in `Info.plist.template` for a release. Cutting
+  a release means: bump `VERSION`, move `CHANGELOG.md`'s `[Unreleased]`
+  section into a new `[X.Y.Z] - YYYY-MM-DD` heading (commit both), then tag
+  and publish:
 
 ```bash
+# 1. Bump version + changelog (commit)
+#    echo "X.Y.Z" > VERSION
+#    edit CHANGELOG.md: [Unreleased] entries -> new "## [X.Y.Z] - YYYY-MM-DD" section
+
+# 2. Build + package
+./Sourcepad/Build/build.sh
 ditto -c -k --sequesterRsrc --keepParent Sourcepad/dist/Sourcepad.app /tmp/Sourcepad-X.Y.Z-macOS-arm64.zip
+
+# 3. Tag + publish — tag must match the committed VERSION exactly
 git -c user.name='Raghunath Chava' \
     -c user.email='258775071+chavaraghunath@users.noreply.github.com' \
     tag vX.Y.Z
 git push origin vX.Y.Z
 gh release create vX.Y.Z /tmp/Sourcepad-X.Y.Z-macOS-arm64.zip \
-  --title "Sourcepad vX.Y.Z" --notes-file <notes> --latest
+  --title "Sourcepad vX.Y.Z" --notes-file <(sed -n '/^## \[X.Y.Z\]/,/^## \[/p' CHANGELOG.md | sed '$d') --latest
 ```
+
+  A version-based bug report should always be traceable: `VERSION` in the
+  report's build ⇒ `git log vX.Y.Z` for the exact commit ⇒ the matching
+  `CHANGELOG.md` section for what shipped.
 
 When a Developer ID is available, add: `codesign` with the Developer ID →
 `notarytool submit --wait` → `stapler staple` for a Gatekeeper-clean build.

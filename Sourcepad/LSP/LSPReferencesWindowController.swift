@@ -63,8 +63,7 @@ public final class LSPReferencesWindowController: NSWindowController,
         guard let path = LSP.path(forURI: loc.uri) else { return }
         let url = URL(fileURLWithPath: path)
         NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
-            guard let editor = (doc as? TextDocument)?.primaryEditorViewController() else { return }
-            editor.editorPane?.goToLine(loc.range.start.line + 1)
+            (doc as? TextDocument)?.liveEditorPane()?.goToLine(loc.range.start.line + 1)
         }
     }
 

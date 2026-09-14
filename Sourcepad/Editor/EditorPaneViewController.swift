@@ -280,7 +280,7 @@ public final class EditorPaneViewController: NSViewController, EditorContent {
             guard let result else { NSSound.beep(); return }
             // Open a new untitled document with the test stub.
             let doc = (try? NSDocumentController.shared.openUntitledDocumentAndDisplay(true)) as? TextDocument
-            doc?.primaryEditorViewController()?.editorPane?.replaceWholeBuffer(with: result)
+            doc?.liveEditorPane()?.replaceWholeBuffer(with: result)
         }
     }
 
@@ -350,8 +350,7 @@ public final class EditorPaneViewController: NSViewController, EditorContent {
             }
             let url = URL(fileURLWithPath: path)
             NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
-                guard let editor = (doc as? TextDocument)?.primaryEditorViewController() else { return }
-                editor.editorPane?.goToLine(first.range.start.line + 1)
+                (doc as? TextDocument)?.liveEditorPane()?.goToLine(first.range.start.line + 1)
             }
         }
     }

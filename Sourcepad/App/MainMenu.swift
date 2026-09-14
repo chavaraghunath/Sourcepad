@@ -52,6 +52,11 @@ public enum MainMenu {
         fileMenu.addItem(withTitle: "Open…",
                          action: #selector(NSDocumentController.openDocument(_:)),
                          keyEquivalent: "o")
+        let openInNewWindow = NSMenuItem(title: "Open in New Window…",
+                                         action: Selector(("sourcepadOpenInNewWindow:")),
+                                         keyEquivalent: "o")
+        openInNewWindow.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(openInNewWindow)
         let openFolder = NSMenuItem(title: "Open Folder…",
                                     action: Selector(("sourcepadOpenFolder:")),
                                     keyEquivalent: "O")
@@ -656,15 +661,7 @@ enum LanguageMenu {
 
     private static func activeEditor() -> EditorViewController? {
         // Most recently active document's first window controller's content VC.
-        if let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-           let wc = doc.windowControllers.first as? EditorWindowController {
-            return wc.editorViewController
-        }
-        // Fallback: any key-window's content VC.
-        if let vc = NSApp.keyWindow?.contentViewController as? EditorViewController {
-            return vc
-        }
-        return nil
+        (NSApp.keyWindow?.windowController as? EditorWindowController)?.editorViewController
     }
 }
 
@@ -692,14 +689,7 @@ enum LanguageMenu {
     }
 
     private func activeEditor() -> EditorViewController? {
-        if let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-           let wc = doc.windowControllers.first as? EditorWindowController {
-            return wc.editorViewController
-        }
-        if let vc = NSApp.keyWindow?.contentViewController as? EditorViewController {
-            return vc
-        }
-        return nil
+        (NSApp.keyWindow?.windowController as? EditorWindowController)?.editorViewController
     }
 }
 
@@ -719,14 +709,7 @@ enum LanguageMenu {
     }
 
     private func activeEditor() -> EditorViewController? {
-        if let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-           let wc = doc.windowControllers.first as? EditorWindowController {
-            return wc.editorViewController
-        }
-        if let vc = NSApp.keyWindow?.contentViewController as? EditorViewController {
-            return vc
-        }
-        return nil
+        (NSApp.keyWindow?.windowController as? EditorWindowController)?.editorViewController
     }
 }
 
@@ -752,9 +735,31 @@ enum WorkspaceMenu {
         populate(menu)
     }
 
+    /// The key window's own workspace — workspaces are per-window (see
+    /// EditorWindowController.workspace), so this menu's "current" workspace
+    /// tracks whichever window is focused, falling back to the global
+    /// default only when no editor window is key (e.g. Settings is focused).
+    private func keyEditorWindowController() -> EditorWindowController? {
+        NSApp.keyWindow?.windowController as? EditorWindowController
+    }
+
+    private func currentWorkspace() -> Workspace {
+        keyEditorWindowController()?.workspace ?? WorkspaceManager.shared.activeWorkspace
+    }
+
+    /// Apply `ws` as the current workspace — the key window's, if there is
+    /// one, else the app-wide default used to seed brand-new windows.
+    private func setCurrentWorkspace(_ ws: Workspace) {
+        if let wc = keyEditorWindowController() {
+            wc.editorViewController.sidebarPane.setWorkspace(ws)
+        } else {
+            WorkspaceManager.shared.activeWorkspace = ws
+        }
+    }
+
     func populate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let active = WorkspaceManager.shared.activeWorkspace
+        let active = currentWorkspace()
         for ws in WorkspaceManager.shared.workspaces {
             let item = NSMenuItem(title: ws.name,
                                   action: #selector(switchWorkspace(_:)),
@@ -789,7 +794,7 @@ enum WorkspaceMenu {
     @objc func switchWorkspace(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let ws = WorkspaceManager.shared.workspaces.first(where: { $0.id == id }) else { return }
-        WorkspaceManager.shared.activeWorkspace = ws
+        setCurrentWorkspace(ws)
     }
 
     @objc func addFolderToWorkspace(_ sender: Any?) {
@@ -800,8 +805,8 @@ enum WorkspaceMenu {
         panel.allowsMultipleSelection = false
         panel.prompt = "Add to Workspace"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        WorkspaceManager.shared.addRoot(url)
-        NotificationCenter.default.post(name: .sourcepadActiveWorkspaceChanged, object: nil)
+        let updated = WorkspaceManager.shared.addRoot(url, to: currentWorkspace())
+        setCurrentWorkspace(updated)
     }
 
     @objc func newWorkspace(_ sender: Any?) {
@@ -820,11 +825,11 @@ enum WorkspaceMenu {
         guard !name.isEmpty else { return }
         let ws = Workspace(name: name)
         WorkspaceManager.shared.upsert(ws)
-        WorkspaceManager.shared.activeWorkspace = ws
+        setCurrentWorkspace(ws)
     }
 
     @objc func renameWorkspace(_ sender: Any?) {
-        var ws = WorkspaceManager.shared.activeWorkspace
+        var ws = currentWorkspace()
         let alert = NameAlert()
         alert.messageText = "Rename Workspace"
         alert.informativeText = "New name:"
@@ -841,10 +846,11 @@ enum WorkspaceMenu {
         guard !name.isEmpty else { return }
         ws.name = name
         WorkspaceManager.shared.upsert(ws)
+        setCurrentWorkspace(ws)
     }
 
     @objc func deleteWorkspace(_ sender: Any?) {
-        let ws = WorkspaceManager.shared.activeWorkspace
+        let ws = currentWorkspace()
         guard WorkspaceManager.shared.workspaces.count > 1 else {
             NSSound.beep()
             return
@@ -857,6 +863,7 @@ enum WorkspaceMenu {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         WorkspaceManager.shared.delete(ws.id)
+        setCurrentWorkspace(WorkspaceManager.shared.activeWorkspace)
     }
 
     @objc func revealWorkspacesFolder(_ sender: Any?) {

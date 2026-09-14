@@ -62,10 +62,9 @@ public final class SymbolPaletteProvider: PaletteProvider {
         guard let payload = item.payload as? SymbolPayload else { return }
         let url = URL(fileURLWithPath: payload.absolutePath)
         NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
-            guard let editor = (doc as? TextDocument)?.primaryEditorViewController() else { return }
             // Symbol jump only meaningful in Scintilla path; placeholder
             // view modes have no caret to move.
-            editor.editorPane?.goToLine(max(1, payload.line))
+            (doc as? TextDocument)?.liveEditorPane()?.goToLine(max(1, payload.line))
         }
     }
 

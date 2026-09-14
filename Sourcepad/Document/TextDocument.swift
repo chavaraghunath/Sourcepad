@@ -67,7 +67,7 @@ public final class TextDocument: NSDocument {
             // either side. Takes precedence over auto-reload so the user's
             // unsaved work is never silently lost.
             let ancestor = self.contents
-            if let mine = primaryEditorViewController()?.currentText,
+            if let mine = liveEditorPane()?.currentText,
                let theirs = readDiskText(),
                mine != ancestor, theirs != ancestor, mine != theirs {
                 offerCoEditMerge(ancestor: ancestor, mine: mine, theirs: theirs)
@@ -159,7 +159,7 @@ public final class TextDocument: NSDocument {
             switch response {
             case .alertFirstButtonReturn:
                 // Apply the merged text to the buffer (unsaved, for the user to review/save).
-                self.primaryEditorViewController()?.editorContent.replaceWholeBuffer(with: merge.merged)
+                self.liveEditorPane()?.replaceWholeBuffer(with: merge.merged)
                 self.contents = theirs   // the on-disk version is the new baseline
                 self.updateChangeCount(.changeDone)
             case .alertThirdButtonReturn:
@@ -179,9 +179,33 @@ public final class TextDocument: NSDocument {
 
     // MARK: - Window controller
 
+    /// DocumentController.openDocument (the app's single real entry point
+    /// for opening a file) resolves the target window itself and attaches
+    /// documents directly, bypassing this entirely — it needs to decide
+    /// *before* a window exists whether to join one or create a new one,
+    /// which this method's signature can't express. This remains as a
+    /// fallback for the few AppKit paths that call it directly (notably
+    /// File ▸ New, wired to the stock NSDocumentController.newDocument(_:) in
+    /// MainMenu.swift): join the current key window as a new tab if it's one
+    /// of ours, matching VS Code's ⌘N behavior, else start a fresh window.
     public override func makeWindowControllers() {
-        let wc = EditorWindowController(document: self)
+        if let key = NSApp.keyWindow, let wc = key.windowController as? EditorWindowController {
+            self.addWindowController(wc)
+            wc.openTab(self, activate: true)
+            return
+        }
+        let wc = EditorWindowController(workspace: WorkspaceManager.shared.activeWorkspace)
         self.addWindowController(wc)
+        wc.openTab(self, activate: true)
+    }
+
+    /// The pane rendering THIS document specifically, regardless of whether
+    /// it's the active/frontmost tab in its window — for background
+    /// operations (agent-applied edits, goto-line from Find in Files/Outline,
+    /// LSP actions, batch formatters) that must reach the right document even
+    /// when it isn't the one currently visible.
+    public func liveEditorPane() -> EditorPaneViewController? {
+        (windowControllers.first as? EditorWindowController)?.editorPane(for: self)
     }
 
     // MARK: - File I/O
@@ -211,7 +235,7 @@ public final class TextDocument: NSDocument {
             self.lineEndings = TextDocument.detectLineEndings(from: text)
         }
         if let editor = primaryEditorViewController() {
-            editor.documentContentsDidLoad()
+            editor.documentContentsDidLoad(for: self)
         }
     }
 
@@ -231,17 +255,18 @@ public final class TextDocument: NSDocument {
     }
 
     public override func data(ofType typeName: String) throws -> Data {
-        // Pull latest from editor (may be ahead of self.contents).
-        if let editor = primaryEditorViewController() {
+        // Pull latest from editor (may be ahead of self.contents). Must go
+        // through THIS document's own pane (liveEditorPane), not whichever
+        // tab happens to be frontmost in its window.
+        if let editor = liveEditorPane() {
             self.contents = editor.currentText
         }
         var working = self.contents
         if Preferences.shared.trimTrailingWhitespaceOnSave {
             working = TextDocument.trimTrailingLineWhitespace(working)
             // Push trimmed back to the editor so the visible buffer matches the file.
-            if let editor = primaryEditorViewController(),
-               editor.editorContent.currentText != working {
-                editor.editorContent.replaceWholeBuffer(with: working)
+            if let editor = liveEditorPane(), editor.currentText != working {
+                editor.replaceWholeBuffer(with: working)
                 self.contents = working
             }
         }
@@ -286,9 +311,13 @@ public final class TextDocument: NSDocument {
         }
         try super.write(to: url, ofType: typeName)
         // Tell Scintilla "this is now the clean state".
-        primaryEditorViewController()?.markSavePoint()
+        liveEditorPane()?.markSavePoint()
     }
 
+    /// The window's shared editor chrome (sidebar, tab bar, preview) — valid
+    /// regardless of which tab is active, since those are window-level, not
+    /// per-document. For this document's own live content/pane specifically,
+    /// use liveEditorPane() instead — it stays correct even as a background tab.
     public func primaryEditorViewController() -> EditorViewController? {
         return windowControllers
             .compactMap { ($0 as? EditorWindowController)?.editorViewController }

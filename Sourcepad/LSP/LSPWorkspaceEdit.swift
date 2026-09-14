@@ -44,8 +44,7 @@ public enum LSPWorkspaceEditApplier {
             guard let path = LSP.path(forURI: uri) else { continue }
             let url = URL(fileURLWithPath: path)
             NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
-                guard let editor = (doc as? TextDocument)?.primaryEditorViewController(),
-                      let pane = editor.editorPane else { return }
+                guard let pane = (doc as? TextDocument)?.liveEditorPane() else { return }
                 applyEdits(rawEdits, to: pane)
             }
         }

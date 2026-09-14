@@ -225,9 +225,9 @@ public final class FindInFilesWindowController: NSWindowController,
 
     private func openResult(_ result: FIFResult, line: Int) {
         NSDocumentController.shared.openDocument(withContentsOf: result.url, display: true) { doc, _, _ in
-            guard let wc = (doc as? TextDocument)?.windowControllers.first as? EditorWindowController else { return }
+            guard let textDoc = doc as? TextDocument else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                wc.editorViewController.editorPane?.goToLine(line)
+                textDoc.liveEditorPane()?.goToLine(line)
             }
         }
     }

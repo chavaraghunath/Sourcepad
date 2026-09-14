@@ -98,8 +98,6 @@ public final class PluginHost {
     }
 
     private static func activePane() -> EditorPaneViewController? {
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-              let editor = doc.primaryEditorViewController() else { return nil }
-        return editor.editorPane
+        DocumentController.activeDocument?.liveEditorPane()
     }
 }

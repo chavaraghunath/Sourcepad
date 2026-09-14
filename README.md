@@ -2,6 +2,8 @@
 
 Native macOS code editor. Scintilla engine, AppKit/Swift shell. MIT.
 
+**Version:** see [`VERSION`](VERSION) (currently `0.1.0`) — full release history in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Status
 
 Phase 0 + Phase 1 vertical slice — usable as a daily-driver text editor for ~150+ languages with automatic light/dark theme adaptation.

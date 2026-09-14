@@ -73,8 +73,14 @@ public final class AgentMessageBubble: NSView {
     public override func layout() {
         super.layout()
         // Cap bubble width to ~82% of the row and tell the label how wide it may
-        // wrap so its intrinsic height is correct.
-        let cap = max(120, bounds.width * 0.82)
+        // wrap so its intrinsic height is correct. Hard-clamped to a sane
+        // absolute ceiling regardless of bounds.width: this view's width is
+        // meant to be fixed by the transcript stack's `.width` alignment, but
+        // deriving the cap from self.bounds.width on every layout pass — while
+        // content is actively streaming in and re-wrapping — has no built-in
+        // floor against a transient bad width propagating back out through
+        // this same computation on the next pass.
+        let cap = min(700, max(120, bounds.width * 0.82))
         widthCap.constant = cap
         label.preferredMaxLayoutWidth = cap - 20
     }

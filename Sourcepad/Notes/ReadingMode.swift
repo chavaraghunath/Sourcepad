@@ -29,10 +29,6 @@ public enum ReadingMode {
     }
 
     private static func activePane() -> EditorPaneViewController? {
-        if let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-           let editor = doc.primaryEditorViewController() {
-            return editor.editorPane
-        }
-        return nil
+        DocumentController.activeDocument?.liveEditorPane()
     }
 }

@@ -9,8 +9,8 @@ public enum SpeakSelection {
     private static let synth = AVSpeechSynthesizer()
 
     public static func speakActiveSelection() {
-        guard let doc = NSDocumentController.shared.currentDocument as? TextDocument,
-              let pane = doc.primaryEditorViewController()?.editorPane else {
+        guard let doc = DocumentController.activeDocument,
+              let pane = doc.liveEditorPane() else {
             NSSound.beep(); return
         }
         let sel = SciGetSelectionBytes(pane.view)

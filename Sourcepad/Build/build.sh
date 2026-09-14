@@ -99,6 +99,7 @@ SWIFT_SRCS=(
     "$APP_DIR/App/SettingsMorePanes.swift"
     "$APP_DIR/App/SessionRestore.swift"
     "$APP_DIR/App/ClosedTabHistory.swift"
+    "$APP_DIR/App/WelcomeWindowController.swift"
     "$APP_DIR/Workspace/Workspace.swift"
     "$APP_DIR/Workspace/WorkspaceManager.swift"
     "$APP_DIR/Workspace/ProjectIndex.swift"
@@ -128,6 +129,7 @@ SWIFT_SRCS=(
     "$APP_DIR/Editor/EditorContent.swift"
     "$APP_DIR/Editor/EditorContentFactory.swift"
     "$APP_DIR/Editor/PlaceholderContent.swift"
+    "$APP_DIR/Editor/NoDocumentContent.swift"
     "$APP_DIR/Views/CSVGridContent.swift"
     "$APP_DIR/Views/JSONTreeContent.swift"
     "$APP_DIR/Views/HexViewContent.swift"
@@ -185,6 +187,9 @@ SWIFT_SRCS=(
     "$APP_DIR/Tools/RegexTesterWindow.swift"
     "$APP_DIR/Scale/TailMode.swift"
     "$APP_DIR/Remote/GitBranchUI.swift"
+    "$APP_DIR/Remote/GitClone.swift"
+    "$APP_DIR/Remote/GitHubAuth.swift"
+    "$APP_DIR/App/GitCloneSheet.swift"
     "$APP_DIR/Themes/ThemeStudio.swift"
     "$APP_DIR/Plugins/PluginHost.swift"
     "$APP_DIR/Debug/DAPClient.swift"
@@ -248,6 +253,15 @@ mv "$BUILD_DIR/Sourcepad" "$APP_BUNDLE/Contents/MacOS/Sourcepad"
 cp -R "$SCI_BUILD/Scintilla.framework" "$APP_BUNDLE/Contents/Frameworks/"
 cp "$SCI_BUILD/liblexilla.dylib"      "$APP_BUNDLE/Contents/Frameworks/"
 cp "$SCRIPT_DIR/Info.plist.template" "$APP_BUNDLE/Contents/Info.plist"
+
+# Stamp the version from the repo-root VERSION file (the single source of
+# truth — keep it in lockstep with CHANGELOG.md) and a monotonic build number
+# from the commit count, so a running build always reports a real, traceable
+# version instead of the template's placeholder.
+APP_VERSION="$(tr -d ' \t\n' < "$REPO_ROOT/VERSION")"
+BUILD_NUMBER="$(git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$APP_BUNDLE/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_BUNDLE/Contents/Info.plist"
 cp "$APP_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 

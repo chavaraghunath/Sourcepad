@@ -87,7 +87,7 @@ public final class RootContentViewController: NSViewController {
         agentItem.canCollapse = true
         agentItem.minimumThickness = 280
         agentItem.holdingPriority = NSLayoutConstraint.Priority(260)
-        agentItem.isCollapsed = true   // always start hidden, like the terminal
+        agentItem.isCollapsed = false   // visible by default, alongside the sidebar
 
         hSplit.addSplitViewItem(leftColumnItem)
         hSplit.addSplitViewItem(agentItem)
@@ -124,6 +124,19 @@ public final class RootContentViewController: NSViewController {
     public override func viewDidAppear() {
         super.viewDidAppear()
         statusBar.refresh()
+    }
+
+    private var didSetInitialAgentWidth = false
+
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        // The agent panel starts visible (not collapsed) but, unlike a manual
+        // toggle, nothing has called ensureReasonableAgentWidth() yet — give
+        // it a sane default width the first time real bounds are available,
+        // instead of whatever bare split gives two same-priority items.
+        guard !didSetInitialAgentWidth, !agentItem.isCollapsed, hSplit.splitView.bounds.width > 0 else { return }
+        didSetInitialAgentWidth = true
+        ensureReasonableAgentWidth()
     }
 
     // MARK: - Terminal panel
@@ -198,17 +211,36 @@ public final class RootContentViewController: NSViewController {
 
     @objc public func sourcepadToggleAgent(_ sender: Any?) { toggleAgent() }
 
+    // MARK: - ⌘W: close the active tab, not the window
+
+    /// RootContentViewController is this window's contentViewController, so
+    /// it's guaranteed to sit in the responder chain right before the
+    /// NSWindow itself — intercepting `performClose(_:)` here means ⌘W
+    /// closes only the active document tab. The window only actually closes
+    /// when the user explicitly hits its close button (or it's already
+    /// empty), handled by EditorWindowController.windowShouldClose.
+    @objc func performClose(_ sender: Any?) {
+        guard let doc = editorVC.activeDocument else {
+            view.window?.performClose(sender)
+            return
+        }
+        editorVC.requestCloseTab(doc)
+    }
+
     // MARK: - Working directory resolution
 
     private func resolveWorkingDirectory() -> String? {
-        if let root = WorkspaceManager.shared.activeWorkspace.roots.first {
-            return root.path
-        }
-        if let docDir = editorVC.document?.fileURL?.deletingLastPathComponent() {
-            return docDir.path
-        }
+        // Prefer this window's own workspace root/document folder — the
+        // terminal is per-window, so it should follow this window's repo,
+        // not whichever workspace happens to be the app-wide default.
         if let sidebarRoot = editorVC.sidebarPane.rootURL {
             return sidebarRoot.path
+        }
+        if let docDir = editorVC.activeDocument?.fileURL?.deletingLastPathComponent() {
+            return docDir.path
+        }
+        if let root = WorkspaceManager.shared.activeWorkspace.roots.first {
+            return root.path
         }
         return nil
     }

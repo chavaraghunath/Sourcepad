@@ -46,11 +46,22 @@ public final class SidebarViewController: NSViewController,
     /// workspace directly via WorkspaceManager.shared.
     public var rootURL: URL? { workspace.roots.first }
 
-    /// Active workspace. Setting this rebuilds the outline.
-    public private(set) var workspace: Workspace = WorkspaceManager.shared.activeWorkspace
+    /// Active workspace. Setting this rebuilds the outline. Each sidebar
+    /// (i.e. each window) owns its own workspace — see setWorkspace(_:).
+    public private(set) var workspace: Workspace
 
     /// Called when the user activates (single-click or Enter) a file row.
     public var onOpen: ((URL) -> Void)?
+
+    public init(workspace: Workspace) {
+        self.workspace = workspace
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    public required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     private let outline = NSOutlineView()
     private let scroll  = NSScrollView()
@@ -182,12 +193,6 @@ public final class SidebarViewController: NSViewController,
         self.view = root
         fileWatcher.onChange = { [weak self] in self?.liveRefresh() }
         applyWorkspace()
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(activeWorkspaceChanged),
-            name: .sourcepadActiveWorkspaceChanged,
-            object: nil)
     }
 
     deinit {
@@ -204,46 +209,33 @@ public final class SidebarViewController: NSViewController,
         applyWorkspace()
     }
 
-    /// Add `url` as a root in the active workspace and reload.
+    /// Add `url` as a root in this sidebar's own workspace and reload.
     public func addRoot(_ url: URL) {
-        workspace = WorkspaceManager.shared.addRoot(url)
+        workspace = WorkspaceManager.shared.addRoot(url, to: workspace)
         childrenCache.removeAll()
         applyWorkspace()
         outline.expandItem(url.standardizedFileURL)
     }
 
-    /// Remove `url` from the active workspace and reload.
+    /// Remove `url` from this sidebar's own workspace and reload.
     public func removeRoot(_ url: URL) {
-        workspace = WorkspaceManager.shared.removeRoot(url)
+        workspace = WorkspaceManager.shared.removeRoot(url, from: workspace)
         childrenCache.removeAll()
         applyWorkspace()
     }
 
     /// Legacy shim — callers that still pass a single URL go through here.
     /// Treated as "make this the workspace's only root" so behavior matches
-    /// the prior single-root semantics.
+    /// the prior single-root semantics. Mutates this sidebar's own workspace
+    /// only — does not touch WorkspaceManager's global active workspace.
     public func setRoot(_ url: URL?) {
-        guard let url else {
-            // Clear all roots in the active workspace.
-            var ws = WorkspaceManager.shared.activeWorkspace
-            ws.roots = []
-            WorkspaceManager.shared.upsert(ws)
-            workspace = ws
-            childrenCache.removeAll()
-            applyWorkspace()
-            return
-        }
-        var ws = WorkspaceManager.shared.activeWorkspace
-        ws.roots = [url.standardizedFileURL]
+        var ws = workspace
+        ws.roots = url.map { [$0.standardizedFileURL] } ?? []
         WorkspaceManager.shared.upsert(ws)
         workspace = ws
         childrenCache.removeAll()
         applyWorkspace()
-        outline.expandItem(url.standardizedFileURL)
-    }
-
-    @objc private func activeWorkspaceChanged() {
-        setWorkspace(WorkspaceManager.shared.activeWorkspace)
+        if let url { outline.expandItem(url.standardizedFileURL) }
     }
 
     @objc public func refreshTapped(_ sender: Any?) {
@@ -331,8 +323,13 @@ public final class SidebarViewController: NSViewController,
     }
 
     private func openFileAtLine(url: URL, line: Int) {
-        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, _ in
-            (doc as? TextDocument)?.primaryEditorViewController()?.editorPane?.goToLine(line)
+        // Same reasoning as EditorViewController's sidebar onOpen: this
+        // sidebar's own window is the unambiguous, known-correct join
+        // target — don't leave it to `.auto`'s key/main-window guessing.
+        guard let dc = NSDocumentController.shared as? DocumentController else { return }
+        let policy: DocumentController.WindowJoinPolicy = view.window.map { .join($0) } ?? .auto
+        dc.openDocument(withContentsOf: url, display: true, joinPolicy: policy) { doc, _, _ in
+            (doc as? TextDocument)?.liveEditorPane()?.goToLine(line)
         }
     }
 
@@ -537,7 +534,10 @@ public final class SidebarViewController: NSViewController,
             return
         }
         refreshAfterMutation(parent: dir)
-        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in }
+        if let dc = NSDocumentController.shared as? DocumentController {
+            let policy: DocumentController.WindowJoinPolicy = view.window.map { .join($0) } ?? .auto
+            dc.openDocument(withContentsOf: url, display: true, joinPolicy: policy) { _, _, _ in }
+        }
     }
 
     @objc private func menuNewFolder(_ sender: Any?) {
